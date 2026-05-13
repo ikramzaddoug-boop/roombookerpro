@@ -1,82 +1,61 @@
 from django.db import models
-from django.core.exceptions import ValidationError
-from django.utils import timezone
-from users.models import CustomUser
+from django.conf import settings
 from rooms.models import Room
+from equipments.models import Equipment
+from django.core.exceptions import ValidationError
 
-class Reservation(models.Model):
-    STATUS_CHOICES = (
-        ('en_attente', 'Pending'),
-        ('confirmee', 'Confirmed'),
-        ('annulee', 'Cancelled'),
-        ('completee', 'Completed'),
-    )
-
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reservations')
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='reservations')
-
+class BaseReservation(models.Model):
+    STATUS_CHOICES = [
+        ('en_attente', 'En attente'),
+        ('confirmee', 'Confirmée'),
+        ('annulee', 'Annulée'),
+        ('refusee', 'Refusée'),
+    ]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     date = models.DateField()
     heure_debut = models.TimeField()
     heure_fin = models.TimeField()
-
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default='en_attente'
-    )
-    
-    titre = models.CharField(max_length=200, blank=True, null=True)
-    description = models.TextField(blank=True, null=True)
-    nombre_personnes = models.IntegerField(default=1)
-    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='en_attente')
+    titre = models.CharField(max_length=200, null=True, blank=True)
+    description = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-date', '-heure_debut']
-
-    def clean(self):
-        if self.heure_debut >= self.heure_fin:
-            raise ValidationError("End time must be after start time.")
-
-        if self.date < timezone.now().date():
-            raise ValidationError("Cannot book a room in the past.")
-
-        if self.nombre_personnes > self.room.capacity:
-            raise ValidationError(
-                f"Number of people ({self.nombre_personnes}) exceeds room capacity ({self.room.capacity})."
-            )
-
-        conflicts = Reservation.objects.filter(
-            room=self.room,
-            date=self.date,
-            heure_debut__lt=self.heure_fin,
-            heure_fin__gt=self.heure_debut,
-            status__in=['en_attente', 'confirmee']
-        ).exclude(id=self.id)
-
-        if conflicts.exists():
-            raise ValidationError("This room is already booked for this time slot.")
-
-    def save(self, *args, **kwargs):
-        self.clean()
-        super().save(*args, **kwargs)
+        abstract = True
 
     def __str__(self):
-        return f"{self.user.username} - {self.room.name} ({self.date})"
+        return f"{self.user.username} - {self.date}"
 
-    @property
-    def duree_heures(self):
-        from datetime import datetime
-        start = datetime.combine(self.date, self.heure_debut)
-        end = datetime.combine(self.date, self.heure_fin)
-        duration = (end - start).total_seconds() / 3600
-        return duration
+class RoomReservation(BaseReservation):
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='room_reservations')
+    nombre_personnes = models.IntegerField(default=1)
 
-    @property
-    def est_a_venir(self):
-        return self.date >= timezone.now().date()
+    def clean(self):
+        # Validation Conflit Salle
+        conflits = RoomReservation.objects.filter(
+            room=self.room,
+            date=self.date,
+            status='confirmee'
+        ).exclude(id=self.id).filter(
+            models.Q(heure_debut__lt=self.heure_fin, heure_fin__gt=self.heure_debut)
+        )
+        if conflits.exists():
+            raise ValidationError("Cette salle est déjà réservée sur ce créneau.")
 
-    @property
-    def peut_etre_annulee(self):
-        return self.status in ['en_attente', 'confirmee'] and self.est_a_venir
+class EquipmentReservation(BaseReservation):
+    equipment = models.ForeignKey(Equipment, on_delete=models.CASCADE, related_name='equipment_reservations')
+    quantite = models.IntegerField(default=1)
+
+    def clean(self):
+        # Validation Stock Équipement
+        total_reserve = EquipmentReservation.objects.filter(
+            equipment=self.equipment,
+            date=self.date,
+            status='confirmee'
+        ).exclude(id=self.id).filter(
+            models.Q(heure_debut__lt=self.heure_fin, heure_fin__gt=self.heure_debut)
+        ).aggregate(total=models.Sum('quantite'))['total'] or 0
+
+        if total_reserve + self.quantite > self.equipment.quantity:
+            raise ValidationError(f"Stock insuffisant pour cet équipement. (Dispo: {self.equipment.quantity - total_reserve})")

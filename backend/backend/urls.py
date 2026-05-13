@@ -15,14 +15,14 @@ from users.views import (
     PasswordResetConfirmView,
 )
 from rooms.views import RoomViewSet
-from equipments.views import EquipmentViewSet, EquipmentReservationViewSet
-from reservations.views import ReservationViewSet
+from equipments.views import EquipmentViewSet
+from reservations.views import RoomReservationViewSet, EquipmentReservationViewSet
 
 router = DefaultRouter()
 router.register(r'rooms', RoomViewSet, basename='room')
 router.register(r'equipments', EquipmentViewSet, basename='equipment')
-router.register(r'equipment-reservations', EquipmentReservationViewSet, basename='equipment_reservation')
-router.register(r'reservations', ReservationViewSet, basename='reservation')
+router.register(r'reservations/rooms', RoomReservationViewSet, basename='room-reservation')
+router.register(r'reservations/equipments', EquipmentReservationViewSet, basename='equipment-reservation')
 router.register(r'users', UserViewSet, basename='user')
 
 urlpatterns = [

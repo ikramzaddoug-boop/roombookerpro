@@ -8,7 +8,7 @@ from .models import Room
 from .serializers import RoomSerializer
 
 class RoomViewSet(viewsets.ModelViewSet):
-    queryset = Room.objects.filter(is_available=True)
+    queryset = Room.objects.all()
     serializer_class = RoomSerializer
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -16,6 +16,55 @@ class RoomViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'location', 'description']
     ordering_fields = ['name', 'capacity', 'created_at']
     ordering = ['name']
+
+    def destroy(self, request, *args, **kwargs):
+        from reservations.models import RoomReservation
+        room = self.get_object()
+        
+        # Delete associated reservations first
+        RoomReservation.objects.filter(room=room).delete()
+        
+        # Then delete the room
+        room.delete()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    
+@action(detail=False, methods=['get'])
+def recommend_rooms(self, request):
+    from rooms.models import Room
+    from equipments.models import Equipment
+    from reservations.utils import recommander_salles
+
+    equipments_param = request.query_params.get('equipments', '')
+
+    if not equipments_param:
+        rooms = Room.objects.all()
+        serializer = self.get_serializer(rooms, many=True)
+        return Response(serializer.data)
+
+    try:
+        equipment_ids = [
+            int(x.strip())
+            for x in equipments_param.split(',')
+            if x.strip()
+        ]
+    except ValueError:
+        return Response(
+            {"error": "Invalid equipment IDs"},
+            status=400
+        )
+
+    equipments = Equipment.objects.filter(id__in=equipment_ids)
+
+    rooms = recommander_salles(equipments)
+
+    serializer = self.get_serializer(rooms, many=True)
+
+    return Response({
+        "results": serializer.data,
+        "count": len(serializer.data)
+    })
+    
 
     @action(detail=False, methods=['get'])
     def available(self, request):
